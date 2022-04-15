@@ -10,10 +10,11 @@ import os
 import evcouplings
 from evcouplings.couplings import MeanFieldDCA
 from evcouplings.align import Alignment, tools, map_matrix
-from evcouplings.compare import DistanceMap, pdb, sifts, distances
-from pcd_potts import l1, matsave, norm_J
+from evcouplings.compare import DistanceMap, sifts, distances
+from pcd_potts import matsave, norm_J
 from Bio import SeqIO
 import torch
+import datetime
 device = torch.device('cuda:' + str(0) if torch.cuda.is_available() else 'cpu')
 
 
@@ -25,13 +26,13 @@ def generate_alignment(pdb_code, chain, save_loc, uniref90, th):
     seq = ''.join(list(seq.dropna().sort_values('seqres_id')['one_letter_code'].values))
     print(f'extracted sequence: {seq}')
     with open(fasta, 'w') as seq_file:
-        seq_file.write(f">{pdb_code}|Chain{chain}/\n{seq}")
+        seq_file.write(f">{pdb_code}|Chain{chain}\n{seq}")
     print('Generating alignment. This will take several minutes...')
     tools.run_jackhmmer(fasta, uniref90, prefix, use_bitscores=False, seq_threshold=th, domain_threshold=th)
     with open(prefix+'.sto', 'r') as input_handle:
         with open(save_loc, 'w') as output_handle:
             sequences = SeqIO.parse(input_handle, 'stockholm')
-            count = SeqIO.write(sequences, output_handle, 'a2m')
+            count = SeqIO.write(sequences, output_handle, 'fasta')
             print(f"Sequences in converted alignment = {count}")
     print('Finished generating alignment')
 
@@ -43,10 +44,10 @@ def generate_contact_map_monomer(pdb_code, chain, save_loc):
     dist_map.to_file(save_loc)
 
 
-def load_real_protein(a2m, intra_file, cutoff, pdb_code, chain, batch_size, th,
+def load_real_protein(a2m, intra_file, cutoff, pdb_code, chain, batch_size, th, overwrite,
                       uniref90='/home/sareeves96/databases/uniref90.fasta'):
 
-    if not os.path.exists(a2m):
+    if not os.path.exists(a2m) or overwrite:
         print("Generating alignment using jackhmmer...")
         generate_alignment(pdb_code, chain, a2m, uniref90, th)
 
@@ -56,13 +57,12 @@ def load_real_protein(a2m, intra_file, cutoff, pdb_code, chain, batch_size, th,
         aln.ids[0] = aln.ids[0] + f'/1-{len(aln[0])}'
         print(aln.ids[0])
 
-    if not os.path.exists(intra_file):
+    if not os.path.exists(intra_file) or overwrite:
         generate_contact_map_monomer(pdb_code, chain, intra_file)
 
     print("Loading distmap(s)")
     distmap_intra = DistanceMap.from_file(intra_file)
 
-    print("Done")
     L = aln.L
     D = len(aln.alphabet)
     print("Raw Data size {}".format((L, D)))
@@ -88,7 +88,7 @@ def load_real_protein(a2m, intra_file, cutoff, pdb_code, chain, batch_size, th,
 
     weight_file = os.path.join(os.path.dirname(a2m), "weights.pkl")
     if not os.path.exists(weight_file):
-        print("Generating weights")
+        print("Generating weights... this may take a few minutes")
         dca.alignment.set_weights()
         weights = dca.alignment.weights
         with open(weight_file, 'wb') as f:
@@ -113,7 +113,7 @@ def load_real_protein(a2m, intra_file, cutoff, pdb_code, chain, batch_size, th,
 
     dca_int_indices = range(len(J[0]))
     dca_int_indices = torch.tensor(dca_int_indices).long()
-    print(dca_int_indices)
+
     return train_loader, test_loader, x_oh, num_ecs, torch.tensor(J), torch.tensor(C), dca_int_indices, L
 
 
@@ -125,6 +125,8 @@ def main(args):
         print(s)
         logger.write(str(s) + '\n')
 
+    my_print(datetime.datetime.now())
+    my_print(args)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     dist_file = os.path.join(args.save_dir, args.pdb_code)
@@ -133,7 +135,14 @@ def main(args):
     # load existing data
     train_loader, test_loader, data, num_ecs, ground_truth_J_norm, ground_truth_C, dm_indices, protein_L = \
         load_real_protein(
-            align_file, dist_file, args.contact_cutoff, args.pdb_code, args.chain, args.batch_size, args.threshold
+            align_file,
+            dist_file,
+            args.contact_cutoff,
+            args.pdb_code,
+            args.chain,
+            args.batch_size,
+            args.threshold,
+            args.overwrite
         )
     dim, n_out = data.size()[1:]
     ground_truth_J_norm = ground_truth_J_norm.to(device)
@@ -167,16 +176,16 @@ def main(args):
     my_print(model)
     my_print(buffer.size())
     my_print(sampler)
+    my_print(datetime.datetime.now())
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     # load ckpt
-    if args.ckpt_path is not None:
+    if args.ckpt_path is not None and not args.overwrite:
         d = torch.load(args.ckpt_path)
         model.load_state_dict(d['model'])
         optimizer.load_state_dict(d['optimizer'])
         sampler.load_state_dict(d['sampler'])
-
 
     # mask matrix for PLM
     L, D = model.J.size(0), model.J.size(2)
@@ -184,7 +193,6 @@ def main(args):
     J_mask = torch.ones((num_node, num_node)).to(device)
     for i in range(L):
         J_mask[D * i:D * i + D, D * i:D * i + D] = 0
-
 
     itr = 0
     sq_errs = []
@@ -229,12 +237,7 @@ def main(args):
             loss.backward()
             optimizer.step()
 
-            if itr % args.print_every == 0:
-                if args.sampler == "plm":
-                    my_print("({}) loss = {:.4f}".format(itr, loss.item()))
-                else:
-                    my_print("({}) log p(real) = {:.4f}, log p(fake) = {:.4f}, diff = {:.4f}, hops = {:.4f}"\
-                             .format(itr,logp_real.item(),logp_fake.item(),obj.item(),sampler._hops))
+            def get_stats():
 
                 sq_err = ((ground_truth_J_norm - norm_J(get_J_sub())) ** 2).sum()
                 rmse = ((ground_truth_J_norm - norm_J(get_J_sub())) ** 2).mean().sqrt()
@@ -243,28 +246,48 @@ def main(args):
                 J_inds = norm_J(get_J_sub())[inds[0], inds[1]]
                 J_inds_sorted = torch.sort(J_inds, descending=True).indices
                 C_inds_sorted = C_inds[J_inds_sorted]
-                recall_tests = [int(protein_L / k) for k in [10, 5, 2, 1]]
-                recall_tests += [num_ecs]
 
                 C_cum_tp = C_inds_sorted.cumsum(0)
-                print(C_cum_tp)
+                # print(C_cum_tp)
                 arange = torch.arange(C_cum_tp.size(0)) + 1
                 acc_at = C_cum_tp.float() / arange.float()
 
                 C_cum_fn = (torch.ones_like(C_inds_sorted) - C_inds_sorted).cumsum(0)
-                print(C_cum_fn)
+                # print(C_cum_fn)
                 recall_at = C_cum_tp.float() / (C_cum_tp.float() + C_cum_fn)
+
+                return sq_err, rmse, acc_at, recall_at
+
+            if itr % args.print_every == 0:
+                if args.sampler == "plm":
+                    my_print("({}) loss = {:.4f}".format(itr, loss.item()))
+                else:
+                    my_print("({}) log p(real) = {:.4f}, log p(fake) = {:.4f}, diff = {:.4f}, hops = {:.4f}"\
+                             .format(itr,logp_real.item(),logp_fake.item(),obj.item(),sampler._hops))
+
+                sq_err, rmse, acc_at, recall_at = get_stats()
 
                 my_print("\t err^2 = {:.4f}, rmse = {:.4f}, acc @ 50 = {:.4f}, acc @ 75 = {:.4f}, acc @ 100 = {:.4f}"\
                          .format(sq_err, rmse, acc_at[50], acc_at[75], acc_at[100]))
+                recall_tests = [int(protein_L / k) for k in [10, 5, 2, 1]]
+                recall_tests += [num_ecs]
                 for r in recall_tests:
-                    print(f"Recall at {r}: {recall_at[r]}")
+                    my_print(f"Recall at {r}: {recall_at[r]}")
                 logger.flush()
 
-
             if itr % args.viz_every == 0:
-                sq_err = ((ground_truth_J_norm - norm_J(get_J_sub())) ** 2).sum()
-                rmse = ((ground_truth_J_norm - norm_J(get_J_sub())) ** 2).mean().sqrt()
+
+                sq_err, rmse, acc_at, recall_at = get_stats()
+
+                mode = 'a' if itr != 0 else 'w'
+                with open("{}/sq_err_int.txt".format(args.save_dir), mode) as f:
+                    f.write(str(sq_err.detach().cpu().numpy()))
+                with open("{}/rmse_int.txt".format(args.save_dir), mode) as f:
+                    f.write(str(rmse.detach().cpu().numpy()))
+                with open("{}/acc_at_int.txt".format(args.save_dir), mode) as f:
+                    f.write(' '.join([str(round(j, 3)) for j in acc_at.detach().cpu().numpy()]))
+                with open("{}/recall_at_int.txt".format(args.save_dir), mode) as f:
+                    f.write(' '.join([str(round(j, 3)) for j in recall_at.detach().cpu().numpy()]))
 
                 sq_errs.append(sq_err.item())
                 plt.clf()
@@ -288,18 +311,13 @@ def main(args):
                         "{}/model_J_{}.png".format(args.save_dir, itr))
                 matsave(norm_J(get_J()), "{}/model_J_norm_{}.png".format(args.save_dir, itr))
 
-                inds = torch.triu_indices(ground_truth_C.size(0), ground_truth_C.size(1), 1)
-                C_inds = ground_truth_C[inds[0], inds[1]]
-                J_inds = norm_J(get_J_sub())[inds[0], inds[1]]
-                J_inds_sorted = torch.sort(J_inds, descending=True).indices
-                C_inds_sorted = C_inds[J_inds_sorted]
-                C_cumsum = C_inds_sorted.cumsum(0)
-                arange = torch.arange(C_cumsum.size(0)) + 1
-                acc_at = C_cumsum.float() / arange.float()
-
                 plt.clf()
                 plt.plot(acc_at[:num_ecs].detach().cpu().numpy())
                 plt.savefig("{}/acc_at_{}.png".format(args.save_dir, itr))
+                plt.clf()
+                plt.plot(recall_at[:num_ecs].detach().cpu().numpy())
+                plt.savefig("{}/recall_at_{}.png".format(args.save_dir, itr))
+
 
             if itr % args.ckpt_every == 0:
                 my_print("Saving checkpoint to {}/ckpt.pt".format(args.save_dir))
@@ -313,12 +331,18 @@ def main(args):
             itr += 1
 
             if itr > args.n_iters:
-                sq_err = ((ground_truth_J_norm - norm_J(get_J_sub())) ** 2).sum()
-                rmse = ((ground_truth_J_norm - norm_J(get_J_sub())) ** 2).mean().sqrt()
-                with open("{}/sq_err.txt".format(args.save_dir), 'w') as f:
-                    f.write(str(sq_err))
-                with open("{}/rmse.txt".format(args.save_dir), 'w') as f:
-                    f.write(str(rmse))
+                sq_err, rmse, acc_at, recall_at = get_stats()
+
+                mode = 'w'
+                with open("{}/sq_err_int.txt".format(args.save_dir), mode) as f:
+                    f.write(str(sq_err.detach().cpu().numpy()))
+                with open("{}/rmse_int.txt".format(args.save_dir), mode) as f:
+                    f.write(str(rmse.detach().cpu().numpy()))
+                with open("{}/acc_at_int.txt".format(args.save_dir), mode) as f:
+                    f.write(' '.join([str(round(j, 3)) for j in acc_at.detach().cpu().numpy()]))
+                with open("{}/recall_at_int.txt".format(args.save_dir), mode) as f:
+                    f.write(' '.join([str(round(j, 3)) for j in recall_at.detach().cpu().numpy()]))
+
 
                 torch.save({
                     "model": model.state_dict(),
@@ -326,6 +350,7 @@ def main(args):
                     "sampler": sampler.state_dict()
                 }, "{}/ckpt.pt".format(args.save_dir))
 
+                my_print(datetime.datetime.now())
                 quit()
 
 
@@ -355,7 +380,8 @@ if __name__ == "__main__":
     # data collection params
     parser.add_argument('--pdb_code', type=str, default="6RFH")
     parser.add_argument('--chain', type=str, default="A")
-    parser.add_argument('--threshold', type=float, default=1)
+    parser.add_argument('--threshold', type=float, default=1e-20)
+    parser.add_argument('--overwrite', action="store_true")
 
     args = parser.parse_args()
     args.device = device
