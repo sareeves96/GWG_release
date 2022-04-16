@@ -22,19 +22,19 @@ def generate_alignment(pdb_code, chain, save_loc, uniref90, th):
     fasta = os.path.join(os.path.dirname(save_loc), 'temp.fa')
     prefix = os.path.splitext(save_loc)[0]
     evchain = evcouplings.compare.pdb.PDB.from_id(pdb_code).get_chain(chain)
-    seq = evchain.residues
-    seq = ''.join(list(seq.dropna().sort_values('seqres_id')['one_letter_code'].values))
+    seq = ''.join(list(evchain.residues.dropna().one_letter_code))
     print(f'extracted sequence: {seq}')
     with open(fasta, 'w') as seq_file:
-        seq_file.write(f">{pdb_code}|Chain{chain}\n{seq}")
+        seq_file.write(f">{pdb_code}|Chain{chain}\n{seq}")  #/1-{len(seq)}
     print('Generating alignment. This will take several minutes...')
-    tools.run_jackhmmer(fasta, uniref90, prefix, use_bitscores=False, seq_threshold=th, domain_threshold=th)
+    tools.run_jackhmmer(fasta, uniref90, prefix, use_bitscores=True, seq_threshold=th, domain_threshold=th) ############
     with open(prefix+'.sto', 'r') as input_handle:
         with open(save_loc, 'w') as output_handle:
             sequences = SeqIO.parse(input_handle, 'stockholm')
             count = SeqIO.write(sequences, output_handle, 'fasta')
             print(f"Sequences in converted alignment = {count}")
     print('Finished generating alignment')
+    print(datetime.datetime.now())
 
 
 def generate_contact_map_monomer(pdb_code, chain, save_loc):
@@ -142,12 +142,15 @@ def main(args):
             args.chain,
             args.batch_size,
             args.threshold,
-            args.overwrite
+            args.overwrite,
+            args.uniref90
         )
     dim, n_out = data.size()[1:]
     ground_truth_J_norm = ground_truth_J_norm.to(device)
     matsave(ground_truth_C, "{}/ground_truth_C.png".format(args.save_dir))
     matsave(ground_truth_J_norm, "{}/ground_truth_dists.png".format(args.save_dir))
+    np.save("{}/ground_truth_C".format(args.save_dir), ground_truth_C)
+    np.save("{}/ground_truth_dists".format(args.save_dir), ground_truth_J_norm)
 
     model = rbm.DensePottsModel(dim, n_out, learn_J=True, learn_bias=True)
     buffer = model.init_sample(args.buffer_size)
@@ -301,6 +304,7 @@ def main(args):
                 plt.legend()
                 plt.savefig("{}/rmse.png".format(args.save_dir))
 
+                np.save("{}/model_J_norm_{}.png".format(args.save_dir, itr), norm_J(get_J()))
 
                 matsave(get_J_sub().abs().transpose(2, 1).reshape(dm_indices.size(0) * n_out,
                                                                   dm_indices.size(0) * n_out),
@@ -380,8 +384,9 @@ if __name__ == "__main__":
     # data collection params
     parser.add_argument('--pdb_code', type=str, default="6RFH")
     parser.add_argument('--chain', type=str, default="A")
-    parser.add_argument('--threshold', type=float, default=1e-20)
+    parser.add_argument('--threshold', type=float, default=100) ##currently bitscores!!
     parser.add_argument('--overwrite', action="store_true")
+    parser.add_argument('--uniref90', type=str, default="./databases/uniref90.fasta")
 
     args = parser.parse_args()
     args.device = device
