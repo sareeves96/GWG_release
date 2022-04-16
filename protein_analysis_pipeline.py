@@ -185,11 +185,11 @@ def main(args):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     # load ckpt
-    if args.ckpt_path is not None and not args.overwrite:
-        d = torch.load(args.ckpt_path)
-        model.load_state_dict(d['model'])
-        optimizer.load_state_dict(d['optimizer'])
-        sampler.load_state_dict(d['sampler'])
+    #if args.ckpt_path is not None and not args.overwrite:
+    #    d = torch.load(args.ckpt_path)
+    #    model.load_state_dict(d['model'])
+    #    optimizer.load_state_dict(d['optimizer'])
+    #    sampler.load_state_dict(d['sampler'])
 
     # mask matrix for PLM
     L, D = model.J.size(0), model.J.size(2)
@@ -258,9 +258,9 @@ def main(args):
 
                 C_cum_fn = (torch.ones_like(C_inds_sorted) - C_inds_sorted).cumsum(0)
                 # print(C_cum_fn)
-                recall_at = C_cum_tp.float() / (C_cum_tp.float() + C_cum_fn)
+                precision_at = C_cum_tp.float() / (C_cum_tp.float() + C_cum_fn)
 
-                return sq_err, rmse, acc_at, recall_at
+                return sq_err, rmse, acc_at, precision_at
 
             if itr % args.print_every == 0:
                 if args.sampler == "plm":
@@ -269,19 +269,19 @@ def main(args):
                     my_print("({}) log p(real) = {:.4f}, log p(fake) = {:.4f}, diff = {:.4f}, hops = {:.4f}"\
                              .format(itr,logp_real.item(),logp_fake.item(),obj.item(),sampler._hops))
 
-                sq_err, rmse, acc_at, recall_at = get_stats()
+                sq_err, rmse, acc_at, precision_at = get_stats()
 
                 my_print("\t err^2 = {:.4f}, rmse = {:.4f}, acc @ 50 = {:.4f}, acc @ 75 = {:.4f}, acc @ 100 = {:.4f}"\
                          .format(sq_err, rmse, acc_at[50], acc_at[75], acc_at[100]))
-                recall_tests = [int(protein_L / k) for k in [10, 5, 2, 1]]
-                recall_tests += [num_ecs]
-                for r in recall_tests:
-                    my_print(f"Recall at {r}: {recall_at[r]}")
+                precision_tests = [int(protein_L / k) for k in [10, 5, 2, 1]]
+                precision_tests += [num_ecs]
+                for r in precision_tests:
+                    my_print(f"precision at {r}: {precision_at[r]}")
                 logger.flush()
 
             if itr % args.viz_every == 0:
 
-                sq_err, rmse, acc_at, recall_at = get_stats()
+                sq_err, rmse, acc_at, precision_at = get_stats()
 
                 mode = 'a' if itr != 0 else 'w'
                 with open("{}/sq_err_int.txt".format(args.save_dir), mode) as f:
@@ -290,8 +290,8 @@ def main(args):
                     f.write(str(rmse.detach().cpu().numpy()))
                 with open("{}/acc_at_int.txt".format(args.save_dir), mode) as f:
                     f.write(' '.join([str(round(j, 3)) for j in acc_at.detach().cpu().numpy()]))
-                with open("{}/recall_at_int.txt".format(args.save_dir), mode) as f:
-                    f.write(' '.join([str(round(j, 3)) for j in recall_at.detach().cpu().numpy()]))
+                with open("{}/precision_at_int.txt".format(args.save_dir), mode) as f:
+                    f.write(' '.join([str(round(j, 3)) for j in precision_at.detach().cpu().numpy()]))
 
                 sq_errs.append(sq_err.item())
                 plt.clf()
@@ -320,8 +320,8 @@ def main(args):
                 plt.plot(acc_at[:num_ecs].detach().cpu().numpy())
                 plt.savefig("{}/acc_at_{}.png".format(args.save_dir, itr))
                 plt.clf()
-                plt.plot(recall_at[:num_ecs].detach().cpu().numpy())
-                plt.savefig("{}/recall_at_{}.png".format(args.save_dir, itr))
+                plt.plot(precision_at[:num_ecs].detach().cpu().numpy())
+                plt.savefig("{}/precision_at_{}.png".format(args.save_dir, itr))
 
 
             if itr % args.ckpt_every == 0:
@@ -336,7 +336,7 @@ def main(args):
             itr += 1
 
             if itr > args.n_iters:
-                sq_err, rmse, acc_at, recall_at = get_stats()
+                sq_err, rmse, acc_at, precision_at = get_stats()
 
                 mode = 'w'
                 with open("{}/sq_err_int.txt".format(args.save_dir), mode) as f:
@@ -345,8 +345,8 @@ def main(args):
                     f.write(str(rmse.detach().cpu().numpy()))
                 with open("{}/acc_at_int.txt".format(args.save_dir), mode) as f:
                     f.write(' '.join([str(round(j, 3)) for j in acc_at.detach().cpu().numpy()]))
-                with open("{}/recall_at_int.txt".format(args.save_dir), mode) as f:
-                    f.write(' '.join([str(round(j, 3)) for j in recall_at.detach().cpu().numpy()]))
+                with open("{}/precision_at_int.txt".format(args.save_dir), mode) as f:
+                    f.write(' '.join([str(round(j, 3)) for j in precision_at.detach().cpu().numpy()]))
 
                 norms = norm_J(get_J())
                 norms_top_l = top_k_mat(norms, norms.size(0))
