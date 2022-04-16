@@ -12,6 +12,7 @@ from evcouplings.couplings import MeanFieldDCA
 from evcouplings.align import Alignment, tools, map_matrix
 from evcouplings.compare import DistanceMap, sifts, distances
 from pcd_potts import matsave, norm_J
+from eval_protein import top_k_mat
 from Bio import SeqIO
 import torch
 import datetime
@@ -149,8 +150,8 @@ def main(args):
     ground_truth_J_norm = ground_truth_J_norm.to(device)
     matsave(ground_truth_C, "{}/ground_truth_C.png".format(args.save_dir))
     matsave(ground_truth_J_norm, "{}/ground_truth_dists.png".format(args.save_dir))
-    np.save("{}/ground_truth_C".format(args.save_dir), ground_truth_C)
-    np.save("{}/ground_truth_dists".format(args.save_dir), ground_truth_J_norm)
+    np.save("{}/ground_truth_C".format(args.save_dir), ground_truth_C.detach().cpu().numpy())
+    np.save("{}/ground_truth_dists".format(args.save_dir), ground_truth_J_norm.detach().cpu().numpy())
 
     model = rbm.DensePottsModel(dim, n_out, learn_J=True, learn_bias=True)
     buffer = model.init_sample(args.buffer_size)
@@ -304,7 +305,7 @@ def main(args):
                 plt.legend()
                 plt.savefig("{}/rmse.png".format(args.save_dir))
 
-                np.save("{}/model_J_norm_{}.png".format(args.save_dir, itr), norm_J(get_J()))
+                np.save("{}/model_J_norm_{}.png".format(args.save_dir, itr), norm_J(get_J()).detach().cpu().numpy())
 
                 matsave(get_J_sub().abs().transpose(2, 1).reshape(dm_indices.size(0) * n_out,
                                                                   dm_indices.size(0) * n_out),
@@ -347,6 +348,13 @@ def main(args):
                 with open("{}/recall_at_int.txt".format(args.save_dir), mode) as f:
                     f.write(' '.join([str(round(j, 3)) for j in recall_at.detach().cpu().numpy()]))
 
+                norms = norm_J(get_J())
+                norms_top_l = top_k_mat(norms, norms.size(0))
+                matsave(norms_top_l, "{}/J_norm_top_{}.png".format(args.save_dir, norms.size(0)))
+                norms_top_l = top_k_mat(norms, 2 * norms.size(0))
+                matsave(norms_top_l, "{}/J_norm_top_{}.png".format(args.save_dir, 2 * norms.size(0)))
+                norms_top_l = top_k_mat(norms, 4 * norms.size(0))
+                matsave(norms_top_l, "{}/J_norm_top_{}.png".format(args.save_dir, 4 * norms.size(0)))
 
                 torch.save({
                     "model": model.state_dict(),
