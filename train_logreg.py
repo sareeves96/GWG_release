@@ -4,6 +4,11 @@ from evcouplings.couplings import MeanFieldDCA, MeanFieldCouplingsModel
 from evcouplings.align import Alignment, tools, map_matrix
 from evcouplings.compare import DistanceMap, sifts, distances
 import pickle
+import random
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import precision_recall_curve, precision_score
+from sklearn.utils import shuffle
+import matplotlib.pyplot as plt
 
 
 def aln_convert(f_name):
@@ -13,6 +18,18 @@ def aln_convert(f_name):
             for i, line in enumerate(f_org.readlines()):
                 f_new.write(f'>seq{i}|/{"1-"+str(len(line)-1)}\n{line}')
 
+def reconstruct_c(vals):
+    target = len(vals)
+    current = 0
+    i = 0
+    while target != current:
+        i += 1
+        current += i
+    indices = np.triu_indices(i+1, 1)
+    c = np.zeros([i+1, i+1])
+    c[indices] = vals
+    c += c.transpose()
+    return c
 
 def generate_features(f_name):
     print("Loading alignment...")
@@ -89,7 +106,10 @@ def generate_train_dataset(train_data_directory='/mnt/c/Users/gooud/GWG_release/
         idx1, idx2 = np.triu_indices(cm.shape[0], 1)
         step = cm.shape[0]
         for idx in list(zip(idx1, idx2)):
+            #print(cm)
             label = cm[idx]
+            #print(idx)
+            #print(cm[idx])
             labels.append(label)
             ax1 = slice(idx[0],None,step)
             ax2 = slice(idx[1],None,step)
@@ -105,11 +125,101 @@ def generate_train_dataset(train_data_directory='/mnt/c/Users/gooud/GWG_release/
             #print(corr)
             feature = covs
             for num in [mutual_info, direct_info, frob, corr]:
-                np.append(feature ,num)
+                feature = np.append(feature ,num)
             features.append(feature)
         pickle.dump(zip(features, labels), open(os.path.splitext(file)[0]+'.pkl', 'wb'))
 
     print(missed)
 
-generate_train_dataset('/home/sreeves/aln')
 
+def load_train_data(path, structure):
+    file = os.path.join(path, structure+'.pkl')
+    with open(file, 'rb') as curr:
+        training_data = pickle.load(curr)
+    features_positive = []
+    features_negative = []
+    for feature, label in training_data:
+        if label == 1:
+            features_positive.append(feature)
+        else:
+            features_negative.append(feature)
+    features_negative = random.sample(features_negative, len(features_positive))
+    labels_positive = list(np.ones(len(features_positive)))
+    labels_negative = list(np.zeros(len(features_negative)))
+    features = features_positive + features_negative
+    labels = labels_positive + labels_negative
+    features_shuffled, labels_shuffled = shuffle(features, labels)
+    return features_shuffled, labels_shuffled
+
+
+def load_test_data(path, structure):
+    file = os.path.join(path, structure+'.pkl')
+    with open(file, 'rb') as curr:
+        features, labels = zip(*pickle.load(curr))
+    c = reconstruct_c(labels)
+    return features, labels, c
+
+
+def train_and_test_lr_model(pkl_path, n_train, n_test, save_loc, name, mask=np.array([1]*400+[0]*4)):
+    os.makedirs(save_loc, exist_ok=True)
+    structures = [os.path.splitext(s)[0] for s in os.listdir(pkl_path) if '.pkl' in s]
+    ind = random.sample(structures, n_train+n_test)
+    structures_train = ind[:n_train]
+    structures_test = ind[n_train:]
+    print(f'training with structures {structures_train}')
+    print(f'testing with structures {structures_test}')
+    features, labels = [], []
+    for s in structures_train:
+        print(s)
+        feat, lab = load_train_data(pkl_path, s)
+        features.extend(feat)
+        labels.extend(lab)
+    X_tr, y_tr = shuffle(features, labels)
+    X_tr_m = [list(np.array(x)*mask) for x in X_tr]
+    lr_cov = LogisticRegression()
+    lr_cov.fit(X_tr_m, y_tr)
+    X_te, y_te = [], []
+
+
+    for s in structures_test:
+        feat, lab, c = load_test_data(pkl_path, s)
+        num_ecs = int(sum(lab))
+        X_te.extend(feat)
+        y_te.extend(lab)
+        X_te_m = [list(np.array(x)*mask) for x in feat]
+        y_pred = lr_cov.predict_proba(X_te_m)[:, 1]
+        p, r, t = precision_recall_curve(lab, y_pred)
+        plt.clf()
+        plt.plot(r, p)
+        plt.savefig(os.path.join(save_loc, name+f'_prc_tested_{s}'))
+        tup = sorted(list(zip(y_pred, lab)), key = lambda x: x[0])
+        y_pred_sorted = np.array([x[0] for x in tup])
+        y_te_sorted = np.array([x[1] for x in tup])
+
+        C_cum_tp = y_te_sorted.cumsum(0)
+        C_cum_fp = (np.ones_like(y_te_sorted) - y_te_sorted).cumsum(0)
+        precision_at = C_cum_tp / (C_cum_tp + C_cum_fp)
+        plt.clf()
+        plt.plot(precision_at[:num_ecs])
+        plt.savefig(os.path.join(save_loc, name+f'_rankorder_tested_{s}'))
+
+        plt.clf()
+        plt.imshow(c)
+        plt.savefig(os.path.join(save_loc, name+f'_trueC_{s}'))
+
+        plt.clf()
+        plt.imshow(reconstruct_c(y_pred))
+        plt.savefig(os.path.join(save_loc, name+f'_predC_{s}'))
+
+    X_te_m = [list(np.array(x)*mask) for x in X_te]
+    y_pred = lr_cov.predict_proba(X_te_m)[:, 1]
+    p, r, t = precision_recall_curve(y_te, y_pred)
+    plt.clf()
+    plt.plot(r, p)
+    plt.savefig(os.path.join(save_loc, name+f'_prc_all'))
+    #with open(os.path.join(save_loc, 'w')) as f:
+    #    f.write('prec')
+#generate_train_dataset('/home/sreeves/aln')
+#dataset = load_train_data('/home/sreeves/aln')
+#pickle.dump(dataset, open('/home/sreeves/GWG_release/dataset.pkl', 'wb'))
+train_and_test_lr_model('/home/sreeves/aln', n_train=2, n_test=2, save_loc='./logreg_test', name='tr_2_t_2_cov_only')
