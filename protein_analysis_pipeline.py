@@ -16,6 +16,7 @@ from eval_protein import top_k_mat
 from Bio import SeqIO
 import torch
 import datetime
+from sklearn import metrics
 device = torch.device('cuda:' + str(0) if torch.cuda.is_available() else 'cpu')
 
 
@@ -241,7 +242,15 @@ def main(args):
             loss.backward()
             optimizer.step()
 
-            def get_stats():
+            def save_prc(f_name):
+                y_true = ground_truth_J_norm.detach().cpu().numpy()
+                y_pred = norm_J(get_J_sub()).detach().cpu().numpy()
+                p, r, t = metrics.precision_recall_curve(y_true, y_pred)
+                plt.clf()
+                plt.plot(p, r)
+                plt.savefig(f_name)
+
+            def get_rank_order_stats():
 
                 sq_err = ((ground_truth_J_norm - norm_J(get_J_sub())) ** 2).sum()
                 rmse = ((ground_truth_J_norm - norm_J(get_J_sub())) ** 2).mean().sqrt()
@@ -252,13 +261,12 @@ def main(args):
                 C_inds_sorted = C_inds[J_inds_sorted]
 
                 C_cum_tp = C_inds_sorted.cumsum(0)
+                C_cum_fp = (torch.ones_like(C_inds_sorted) - C_inds_sorted).cumsum(0)
                 # print(C_cum_tp)
                 arange = torch.arange(C_cum_tp.size(0)) + 1
                 acc_at = C_cum_tp.float() / arange.float()
 
-                C_cum_fn = (torch.ones_like(C_inds_sorted) - C_inds_sorted).cumsum(0)
-                # print(C_cum_fn)
-                precision_at = C_cum_tp.float() / (C_cum_tp.float() + C_cum_fn)
+                precision_at = C_cum_tp.float() / (C_cum_tp.float() + C_cum_fp)
 
                 return sq_err, rmse, acc_at, precision_at
 
@@ -269,7 +277,7 @@ def main(args):
                     my_print("({}) log p(real) = {:.4f}, log p(fake) = {:.4f}, diff = {:.4f}, hops = {:.4f}"\
                              .format(itr,logp_real.item(),logp_fake.item(),obj.item(),sampler._hops))
 
-                sq_err, rmse, acc_at, precision_at = get_stats()
+                sq_err, rmse, acc_at, precision_at = get_rank_order_stats()
 
                 my_print("\t err^2 = {:.4f}, rmse = {:.4f}, acc @ 50 = {:.4f}, acc @ 75 = {:.4f}, acc @ 100 = {:.4f}"\
                          .format(sq_err, rmse, acc_at[50], acc_at[75], acc_at[100]))
@@ -281,7 +289,7 @@ def main(args):
 
             if itr % args.viz_every == 0:
 
-                sq_err, rmse, acc_at, precision_at = get_stats()
+                sq_err, rmse, acc_at, precision_at = get_rank_order_stats()
 
                 mode = 'a' if itr != 0 else 'w'
                 with open("{}/sq_err_int.txt".format(args.save_dir), mode) as f:
@@ -306,12 +314,6 @@ def main(args):
                 plt.savefig("{}/rmse.png".format(args.save_dir))
 
                 np.save("{}/model_J_norm_{}.png".format(args.save_dir, itr), norm_J(get_J()).detach().cpu().numpy())
-
-                matsave(get_J_sub().abs().transpose(2, 1).reshape(dm_indices.size(0) * n_out,
-                                                                  dm_indices.size(0) * n_out),
-                        "{}/model_J_{}_sub.png".format(args.save_dir, itr))
-                matsave(norm_J(get_J_sub()), "{}/model_J_norm_{}_sub.png".format(args.save_dir, itr))
-
                 matsave(get_J().abs().transpose(2, 1).reshape(dim * n_out, dim * n_out),
                         "{}/model_J_{}.png".format(args.save_dir, itr))
                 matsave(norm_J(get_J()), "{}/model_J_norm_{}.png".format(args.save_dir, itr))
@@ -322,7 +324,7 @@ def main(args):
                 plt.clf()
                 plt.plot(precision_at[:num_ecs].detach().cpu().numpy())
                 plt.savefig("{}/precision_at_{}.png".format(args.save_dir, itr))
-
+                save_prc("{}/prc_at_{}.png".format(args.save_dir, itr))
 
             if itr % args.ckpt_every == 0:
                 my_print("Saving checkpoint to {}/ckpt.pt".format(args.save_dir))
@@ -336,7 +338,7 @@ def main(args):
             itr += 1
 
             if itr > args.n_iters:
-                sq_err, rmse, acc_at, precision_at = get_stats()
+                sq_err, rmse, acc_at, precision_at = get_rank_order_stats()
 
                 mode = 'w'
                 with open("{}/sq_err_int.txt".format(args.save_dir), mode) as f:
@@ -384,7 +386,7 @@ if __name__ == "__main__":
     parser.add_argument('--print_every', type=int, default=100)
     parser.add_argument('--viz_every', type=int, default=1000)
     parser.add_argument('--ckpt_every', type=int, default=1000)
-    parser.add_argument('--lr', type=float, default=.01)
+    parser.add_argument('--lr', type=float, default=.001)
     parser.add_argument('--weight_decay', type=float, default=.0)
     parser.add_argument('--l1', type=float, default=.0)
     parser.add_argument('--contact_cutoff', type=float, default=5.)
