@@ -6,8 +6,11 @@ from evcouplings.compare import DistanceMap, sifts, distances
 import pickle
 import random
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import precision_recall_curve, precision_score
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import precision_recall_curve, average_precision_score
 from sklearn.utils import shuffle
+from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
 
 
@@ -17,6 +20,7 @@ def aln_convert(f_name):
             #f_new.write('CLUSTAL W (1.82) multiple sequence alignment\n')
             for i, line in enumerate(f_org.readlines()):
                 f_new.write(f'>seq{i}|/{"1-"+str(len(line)-1)}\n{line}')
+
 
 def reconstruct_c(vals):
     target = len(vals)
@@ -160,26 +164,34 @@ def load_test_data(path, structure):
     return features, labels, c
 
 
-def train_and_test_lr_model(pkl_path, n_train, n_test, save_loc, name, mask=np.array([1]*400+[0]*4)):
+def train_and_test_lr_model(pkl_path, n_train, n_test, save_loc, name, use_train_structures=None,\
+                            use_test_structures=None, mask=np.array([1]*400+[0]*4)):
     os.makedirs(save_loc, exist_ok=True)
-    structures = [os.path.splitext(s)[0] for s in os.listdir(pkl_path) if '.pkl' in s]
-    ind = random.sample(structures, n_train+n_test)
-    structures_train = ind[:n_train]
-    structures_test = ind[n_train:]
+    if use_train_structures is None or use_test_structures is None:
+        print('Choosing structures randomly')
+        structures = [os.path.splitext(s)[0] for s in os.listdir(pkl_path) if '.pkl' in s]
+        ind = random.sample(structures, n_train+n_test)
+        structures_train = ind[:n_train]
+        structures_test = ind[n_train:]
+    else:
+        print('Using selected structures')
+        structures_train = use_train_structures
+        structures_test = use_test_structures
     print(f'training with structures {structures_train}')
     print(f'testing with structures {structures_test}')
     features, labels = [], []
     for s in structures_train:
-        print(s)
         feat, lab = load_train_data(pkl_path, s)
         features.extend(feat)
         labels.extend(lab)
     X_tr, y_tr = shuffle(features, labels)
     X_tr_m = [list(np.array(x)*mask) for x in X_tr]
-    lr_cov = LogisticRegression()
-    lr_cov.fit(X_tr_m, y_tr)
+    scaler = MinMaxScaler()
+    scaler.fit(X_tr_m)
+    X_tr_scaled = scaler.transform(X_tr_m)
+    lr_cov = RandomForestClassifier()
+    lr_cov.fit(X_tr_scaled, y_tr)
     X_te, y_te = [], []
-
 
     for s in structures_test:
         feat, lab, c = load_test_data(pkl_path, s)
@@ -187,12 +199,13 @@ def train_and_test_lr_model(pkl_path, n_train, n_test, save_loc, name, mask=np.a
         X_te.extend(feat)
         y_te.extend(lab)
         X_te_m = [list(np.array(x)*mask) for x in feat]
-        y_pred = lr_cov.predict_proba(X_te_m)[:, 1]
+        X_te_scaled = scaler.transform(X_te_m)
+        y_pred = lr_cov.predict_proba(X_te_scaled)[:, 1]
         p, r, t = precision_recall_curve(lab, y_pred)
         plt.clf()
         plt.plot(r, p)
         plt.savefig(os.path.join(save_loc, name+f'_prc_tested_{s}'))
-        tup = sorted(list(zip(y_pred, lab)), key = lambda x: x[0])
+        tup = sorted(list(zip(y_pred, lab)), key = lambda x: x[0], reverse=True)
         y_pred_sorted = np.array([x[0] for x in tup])
         y_te_sorted = np.array([x[1] for x in tup])
 
@@ -204,22 +217,27 @@ def train_and_test_lr_model(pkl_path, n_train, n_test, save_loc, name, mask=np.a
         plt.savefig(os.path.join(save_loc, name+f'_rankorder_tested_{s}'))
 
         plt.clf()
-        plt.imshow(c)
-        plt.savefig(os.path.join(save_loc, name+f'_trueC_{s}'))
-
-        plt.clf()
-        plt.imshow(reconstruct_c(y_pred))
-        plt.savefig(os.path.join(save_loc, name+f'_predC_{s}'))
+        fig, axs = plt.subplots(2)
+        axs[0].imshow(reconstruct_c(y_pred))
+        axs[1].imshow(c)
+        plt.savefig(os.path.join(save_loc, name+f'_pred_true_C_{s}'))
+        plt.close('all')
 
     X_te_m = [list(np.array(x)*mask) for x in X_te]
-    y_pred = lr_cov.predict_proba(X_te_m)[:, 1]
+    X_te_scaled = scaler.transform(X_te_m)
+    y_pred = lr_cov.predict_proba(X_te_scaled)[:, 1]
     p, r, t = precision_recall_curve(y_te, y_pred)
     plt.clf()
-    plt.plot(r, p)
+    plt.plot(r[::100], p[::100])
     plt.savefig(os.path.join(save_loc, name+f'_prc_all'))
+    auprc = average_precision_score(y_te, y_pred)
+    print(f'Area under prc: {auprc}')
+    with open(os.path.join(save_loc, name+f'auprc'), 'w') as f:
+        f.write(str(auprc))
+    return structures_train, structures_test
     #with open(os.path.join(save_loc, 'w')) as f:
     #    f.write('prec')
 #generate_train_dataset('/home/sreeves/aln')
 #dataset = load_train_data('/home/sreeves/aln')
 #pickle.dump(dataset, open('/home/sreeves/GWG_release/dataset.pkl', 'wb'))
-train_and_test_lr_model('/home/sreeves/aln', n_train=2, n_test=2, save_loc='./logreg_test', name='tr_2_t_2_cov_only')
+tr, te = train_and_test_lr_model('/home/sreeves/aln', n_train=100, n_test=100, save_loc='./rf_100_all_feats', name='', mask=np.array([1]*400+[1]*4)) #use_train_structures=tr, use_test_structures=te)
