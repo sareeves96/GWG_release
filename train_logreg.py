@@ -1,14 +1,8 @@
-from scipy.sparse import coo_matrix
 import os
 import numpy as np
-from Bio import AlignIO
-from Bio.Align.AlignInfo import SummaryInfo
-import pandas as pd
-import evcouplings
 from evcouplings.couplings import MeanFieldDCA, MeanFieldCouplingsModel
 from evcouplings.align import Alignment, tools, map_matrix
 from evcouplings.compare import DistanceMap, sifts, distances
-from sklearn.linear_model import LogisticRegression
 import pickle
 
 
@@ -20,7 +14,7 @@ def aln_convert(f_name):
                 f_new.write(f'>seq{i}|/{"1-"+str(len(line)-1)}\n{line}')
 
 
-def generate_features(f_name='/mnt/c/Users/gooud/Downloads/dc_train/aln/5fjzA0.txt'):
+def generate_features(f_name):
     print("Loading alignment...")
     with open(f_name, "r") as infile:
         aln = Alignment.from_file(infile, format="fasta")
@@ -41,7 +35,7 @@ def generate_features(f_name='/mnt/c/Users/gooud/Downloads/dc_train/aln/5fjzA0.t
     return cov, mi, di, fn, cn
 
 
-def generate_contact_map_monomer(f_name='/mnt/c/Users/gooud/Downloads/dc_train/aln/5fjzA0.txt', cutoff=5.):
+def generate_contact_map_monomer(f_name, cutoff=5.):
     print('Generating distance map')
     code = os.path.split(f_name)[-1]
     pdb_code, pdb_chain = code[:4], code[4]
@@ -62,31 +56,60 @@ def generate_contact_map_monomer(f_name='/mnt/c/Users/gooud/Downloads/dc_train/a
     return C
 
 
-def generate_train_dataset(train_data_directory='/mnt/c/Users/gooud/Downloads/dc_train/aln/'):
-    features = []
-    labels = []
+def generate_train_dataset(train_data_directory='/mnt/c/Users/gooud/GWG_release/databases/aln'):
+    missed = []
     for f in os.listdir(train_data_directory):
+        features = []
+        labels = []
         file = os.path.join(train_data_directory, f)
         print(os.path.splitext(file))
         print(os.path.splitext(file)[0]+'.txt')
+        if os.path.exists(os.path.splitext(file)[0]+'.pkl'):
+            print(f'Skipping {file}')
+            continue
         if os.path.splitext(file)[-1] == '.aln' and not os.path.exists(os.path.splitext(file)[0]+'.txt'):
             aln_convert(file)
-        elif os.path.splitext(file)[-1] == '.aln':
+            file = os.path.splitext(file)[0]+'.txt'
+        #elif os.path.splitext(file)[-1] == '.aln':
+        #    continue
+        elif os.path.splitext(file)[-1] != '.txt':
+            print(f"Skipped {file}")
             continue
-        assert os.path.splitext(file)[-1] == '.txt'
-        cov, mi, di, fn, cn = generate_features(file)
-        cm = generate_contact_map_monomer(file)
-        assert mi.shape == cm.shape
-        for idx in np.triu_indices(cm.shape[0], 1):
+        try:
+            cov, mi, di, fn, cn = generate_features(file)
+            cm = generate_contact_map_monomer(file)
+        except ValueError:
+            print(f'Couldn\'t load data for file {file}')
+            missed.append(file)
+            continue
+        if mi.shape != cm.shape:
+            print(f'incongruent shapes: {mi.shape}, {cm.shape}')
+            missed.append(file)
+            continue
+        idx1, idx2 = np.triu_indices(cm.shape[0], 1)
+        step = cm.shape[0]
+        for idx in list(zip(idx1, idx2)):
             label = cm[idx]
             labels.append(label)
-            covs = np.array([cov[idx*j] for j in range(20)]).flatten()
-            mutual_info = np.array(mi[idx])
-            direct_info = np.array(di[idx])
-            frob = np.array(fn[idx])
-            corr = np.array(cn[idx])
-            feature = np.concatenate([covs, mutual_info, direct_info, frob, corr])
+            ax1 = slice(idx[0],None,step)
+            ax2 = slice(idx[1],None,step)
+            covs = cov[ax1,ax2].flatten()
+            mutual_info = mi[idx]
+            direct_info = di[idx]
+            frob = fn[idx]
+            corr = cn[idx]
+            #print(covs)
+            #print(mutual_info)
+            #print(direct_info)
+            #print(frob)
+            #print(corr)
+            feature = covs
+            for num in [mutual_info, direct_info, frob, corr]:
+                np.append(feature ,num)
             features.append(feature)
-    return features, labels
+        pickle.dump(zip(features, labels), open(os.path.splitext(file)[0]+'.pkl', 'wb'))
 
-features, labels = generate_train_dataset()
+    print(missed)
+
+generate_train_dataset('/home/sreeves/aln')
+
