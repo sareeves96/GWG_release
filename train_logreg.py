@@ -12,6 +12,7 @@ from sklearn.metrics import precision_recall_curve, average_precision_score
 from sklearn.utils import shuffle
 from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
+from propy import PyPro
 
 
 def aln_convert(f_name):
@@ -153,6 +154,18 @@ def load_train_data(path, structure):
     features = features_positive + features_negative
     labels = labels_positive + labels_negative
     features_shuffled, labels_shuffled = shuffle(features, labels)
+    with open(file.replace('.pkl', '.txt'), 'r') as f:
+        for i, line in enumerate(f):
+            if i == 1:
+                seq = line.strip()
+                break
+    DesObject = PyPro.GetProDes(seq)
+    aac = list(DesObject.GetAAComp().values())
+    ctd = list(DesObject.GetCTD().values())
+    mbauto = list(DesObject.GetMoranAuto().values())
+    prot_feats = aac + ctd + mbauto
+    features_shuffled = [list(f) + prot_feats for f in features_shuffled]
+
     return features_shuffled, labels_shuffled
 
 
@@ -165,7 +178,7 @@ def load_test_data(path, structure):
 
 
 def train_and_test_lr_model(pkl_path, n_train, n_test, save_loc, name, use_train_structures=None,\
-                            use_test_structures=None, mask=np.array([1]*400+[0]*4)):
+                            use_test_structures=None, mask=np.array([1]*400+[1]*4+[1]*20+[1]*147+[1]*240)):
     os.makedirs(save_loc, exist_ok=True)
     if use_train_structures is None or use_test_structures is None:
         print('Choosing structures randomly')
@@ -223,13 +236,14 @@ def train_and_test_lr_model(pkl_path, n_train, n_test, save_loc, name, use_train
         plt.savefig(os.path.join(save_loc, name+f'_pred_true_C_{s}'))
         plt.close('all')
 
+    print('here')
     X_te_m = [list(np.array(x)*mask) for x in X_te]
     X_te_scaled = scaler.transform(X_te_m)
     y_pred = lr_cov.predict_proba(X_te_scaled)[:, 1]
     p, r, t = precision_recall_curve(y_te, y_pred)
-    plt.clf()
-    plt.plot(r[::100], p[::100])
-    plt.savefig(os.path.join(save_loc, name+f'_prc_all'))
+    #plt.clf()
+    #plt.plot(r[::100], p[::100])
+    #plt.savefig(os.path.join(save_loc, name+f'_prc_all'))
     auprc = average_precision_score(y_te, y_pred)
     print(f'Area under prc: {auprc}')
     with open(os.path.join(save_loc, name+f'auprc'), 'w') as f:
@@ -240,4 +254,4 @@ def train_and_test_lr_model(pkl_path, n_train, n_test, save_loc, name, use_train
 #generate_train_dataset('/home/sreeves/aln')
 #dataset = load_train_data('/home/sreeves/aln')
 #pickle.dump(dataset, open('/home/sreeves/GWG_release/dataset.pkl', 'wb'))
-tr, te = train_and_test_lr_model('/home/sreeves/aln', n_train=100, n_test=100, save_loc='./rf_100_all_feats', name='', mask=np.array([1]*400+[1]*4)) #use_train_structures=tr, use_test_structures=te)
+tr, te = train_and_test_lr_model('/home/sreeves/aln', n_train=100, n_test=100, save_loc='./rf_100_all_feats', name='', mask=np.array([1]*400+[1]*4+[1]*20+[1]*147+[1]*240)) #use_train_structures=tr, use_test_structures=te)
