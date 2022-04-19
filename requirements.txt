@@ -1,14 +1,5 @@
-billiard==3.6.4.0
 biopython==1.79
-bokeh==2.3.3
-certifi==2021.10.8
-charset-normalizer==2.0.12
-click==8.0.4
-cycler==0.11.0
-dataclasses==0.8
 evcouplings==0.1.1
-filelock==3.4.1
-idna==3.3
 igraph==0.9.10
 importlib-metadata==4.8.3
 importlib-resources==5.4.0

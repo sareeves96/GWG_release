@@ -4,7 +4,10 @@ Official release of code for
 which has been accepted for a long presentation to ICML 2021. 
 
 The paper is by [Will Grathwohl](http://www.cs.toronto.edu/~wgrathwohl/), Kevin Swersky, Milad Hashemi, 
-[David Duvenaud](http://www.cs.toronto.edu/~duvenaud/), and [Chris Maddison](https://www.cs.toronto.edu/~cmaddis/)
+[David Duvenaud](http://www.cs.toronto.edu/~duvenaud/), and [Chris Maddison](https://www.cs.toronto.edu/~cmaddis/).
+The original repository can be found [here](https://github.com/wgrathwohl/GWG_release). It does not include a training dataset for protein contact analysis,
+hence, my code reconstructs the dataset used to my best possible ability (simultaneously improving its flexibility
+and enabling the generation of a larger training set).
 
 I have adapted this code for the purposes of my SYDE 675 - Pattern Recogntion Final Project.
 My contributions include protein_analysis_pipeline.py, which imports and/or repurposes many functions written by the 
