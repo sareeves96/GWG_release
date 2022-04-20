@@ -11,7 +11,8 @@ and enabling the generation of a larger training set).
 
 I have adapted this code for the purposes of my SYDE 675 - Pattern Recognition Final Project.
 My contributions include protein_analysis_pipeline.py, which imports and/or repurposes many functions written by the 
-original authors.
+original authors. My results can be found on the same OneDrive link I provided in the dropbox submission:
+https://uofwaterloo-my.sharepoint.com/:f:/r/personal/sareeves_uwaterloo_ca/Documents/SYDE%20675%20PROJECT%20FILES?csf=1&web=1&e=faaKN3
 I also make significant use of the evcouplings python package (which is based on 
 [this](https://doi.org/10.1371/journal.pone.0028766) paper by Marks et al.) in my train_logreg file, which generates 
 features for my own choice of original model/feature combination.
