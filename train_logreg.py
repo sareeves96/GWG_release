@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 from propy import PyPro
 import pandas as pd
 from additional_utils import aln_convert, reconstruct_c, plot_stats
+import argparse
 
 
 def generate_msa_features(f_name):
@@ -103,7 +104,7 @@ def parse_alignment_into_dataset(file):
     return features, labels
 
 
-def generate_train_dataset(train_data_directory='/mnt/d/aln'):
+def generate_train_dataset(train_data_directory='./aln'):
     missed = []
     for f in os.listdir(train_data_directory):
         file = os.path.join(train_data_directory, f)
@@ -246,7 +247,7 @@ def train_and_test_lr_model(pkl_path, n_train, n_test, save_loc, name,  precompu
     return structures_train, structures_test
 
 
-def test_on_example_prots(directories=['1HZXOPSD_gwg', '2O72CADH_gwg', '6MSP_gwg_25', '6t1z_gwg'], model_opt='./lr_100_l2/optimized_model.pkl'):
+def test_on_example_prots(directories, model_opt='./lr_100_l2/optimized_model.pkl'):
     lr_cov = pickle.load(open(model_opt, 'rb'))
     scaler = pickle.load(open(model_opt.replace('optimized_model', 'scaler'), 'rb'))
     for dir in directories:
@@ -266,7 +267,22 @@ def test_on_example_prots(directories=['1HZXOPSD_gwg', '2O72CADH_gwg', '6MSP_gwg
         y_pred = lr_cov.predict_proba(X_te_scaled)[:, 1]
         plot_stats(y_pred, lab, num_ecs, pdb)
 
-#generate_train_dataset(train_data_directory='/mnt/d/OneDrive - University of Waterloo/aln')
-tr, te = train_and_test_lr_model('/mnt/d/OneDrive - University of Waterloo/aln', n_train=100, n_test=10,
-                                 save_loc='./lr_100_l2', name='', precomputed=True)
-#test_on_example_prots(['6MSP_gwg_30'])
+
+def main(args):
+    train_and_test_lr_model(args.aln_folder_location, n_train=args.n_train, n_test=args.n_test, save_loc=args.save_loc,
+                            name=args.name, precomputed=args.precomputed)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--save_dir', type=str, default="./logreg_test")
+    parser.add_argument('--aln_folder_location', default='./aln')
+    parser.add_argument('--n_train', type=int, default=100)
+    parser.add_argument('--n_test', type=int, default=10)
+    parser.add_argument('--name', type=str, default='')
+    parser.add_argument('--precomputed', action="store_true")
+
+    args = parser.parse_args()
+    main(args)
+
