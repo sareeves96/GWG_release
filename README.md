@@ -1,5 +1,5 @@
 # GWG_release - SYDE 675 Analysis
-Official release of code for 
+An extension of code which supplements the below paper
 ["Oops I Took A Gradient: Scalable Sampling for Discrete Distributions"](https://arxiv.org/abs/2102.04509) 
 which has been accepted for a long presentation to ICML 2021. 
 
@@ -34,15 +34,17 @@ gzip -d uniref90.fasta.gz
 ```
 # Training Data
 It is not necessary to have the raw (multiple sequence alignment) training data for the Logistic Regression 
-as the features have been precomputed and stored. However, it can be downloaded like this:
+as the features have been precomputed and stored (shared via OneDrive). However, it can be downloaded like this:
 ```
 wget http://bioinfadmin.cs.ucl.ac.uk/downloads/contact_pred_datasets/dc_train
 tar -xzf dc_train
 ```
 It is sourced from the following paper: 
 [Jones DT and Kandathil SM (2018). High precision in protein contact prediction using fully convolutional neural networks and minimal sequence features. Bioinformatics 34(19): 3308-3315.](https://github.com/psipred/DeepCov)
-Contact maps are generated independently of this, and so only the aln folder is needed.
-Generating features from the training data is an enormous task, and so pickles with pre-extracted features have been provided in the data folder.
+Contact maps are generated independently of this dataset, and so only the aln folder is needed.
+Generating features from the training data is an enormous task, and so pickles with pre-extracted features are provided
+via OneDrive, while the precomputed_training_data.pkl stores an example slice which can be loaded into memory.
+
 
 # Experimenting with Code
 protein_analysis_pipeline.py trains a Dense Potts model for contact prediction, using the Gibbs-with-Gradients algorithm
@@ -50,7 +52,7 @@ to sample the model, accelerating training. It should be possible to train a mod
 solved structure from the pdb, provided you have the four-character code and chain corresponding to an entry in the
 Protein DataBank: https://www.rcsb.org/
 ```
-python protein_analysis_pipeline.py --pdb_code 1F88 --chain A  --save_dir ./1F88_OPSD_BOVIN_gwg
+python protein_analysis_pipeline.py --pdb_code 2o72 --save_dir ./2o72_test
 ```
 The train_logreg.py file will use a pickle to recieve the input training data by default. You can just call:
 ```

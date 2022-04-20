@@ -1,48 +1,31 @@
 import os
 import numpy as np
-from evcouplings.couplings import MeanFieldDCA, MeanFieldCouplingsModel
-from evcouplings.align import Alignment, tools, map_matrix
-from evcouplings.compare import DistanceMap, sifts, distances
+from evcouplings.couplings import MeanFieldDCA
+from evcouplings.align import Alignment
+from evcouplings.compare import sifts, distances
+import evcouplings
 import pickle
 import random
 from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import precision_recall_curve, average_precision_score
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import precision_recall_curve
 from sklearn.utils import shuffle
 from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
 from propy import PyPro
+import pandas as pd
+from additional_utils import aln_convert, reconstruct_c, plot_stats
 
 
-def aln_convert(f_name):
-    with open(f_name, 'r') as f_org:
-        with open(os.path.splitext(f_name)[0]+'.txt', 'w') as f_new:
-            #f_new.write('CLUSTAL W (1.82) multiple sequence alignment\n')
-            for i, line in enumerate(f_org.readlines()):
-                f_new.write(f'>seq{i}|/{"1-"+str(len(line)-1)}\n{line}')
-
-
-def reconstruct_c(vals):
-    target = len(vals)
-    current = 0
-    i = 0
-    while target != current:
-        i += 1
-        current += i
-    indices = np.triu_indices(i+1, 1)
-    c = np.zeros([i+1, i+1])
-    c[indices] = vals
-    c += c.transpose()
-    return c
-
-def generate_features(f_name):
+def generate_msa_features(f_name):
     print("Loading alignment...")
     with open(f_name, "r") as infile:
         aln = Alignment.from_file(infile, format="fasta")
-        # aln.ids[0] = aln.ids[0] + f'/1-{len(aln[0])}'
-        # print(aln.ids[0])
-    dca = MeanFieldDCA(aln)
+    try:
+        dca = MeanFieldDCA(aln)
+    except:
+        aln.ids[0] = aln.ids[0] + f'/1-{len(aln[0])}'
+        dca = MeanFieldDCA(aln)
     model = dca.fit()
     cov = dca.compute_covariance_matrix()
     mi = model.mi_scores_raw
@@ -57,14 +40,30 @@ def generate_features(f_name):
     return cov, mi, di, fn, cn
 
 
+def generate_protein_sequence_features(seq):
+    DesObject = PyPro.GetProDes(seq)
+    aac = list(DesObject.GetAAComp().values())
+    ctd = list(DesObject.GetCTD().values())
+    mbauto = list(DesObject.GetMoranAuto().values())
+    prot_feats = aac + ctd + mbauto
+    return prot_feats
+
+
 def generate_contact_map_monomer(f_name, cutoff=5.):
     print('Generating distance map')
     code = os.path.split(f_name)[-1]
     pdb_code, pdb_chain = code[:4], code[4]
     print(pdb_code, pdb_chain)
-    res = sifts.SIFTS('./pdb_chain_uniprot.csv').by_pdb_id(pdb_code, pdb_chain=pdb_chain)
-    dist_map = distances.intra_dists(res)
-    dist_map.to_file(f_name.replace(f'aln/{code}', f'map/{code}'))
+    try:
+        res = sifts.SIFTS('./pdb_chain_uniprot.csv').by_pdb_id(pdb_code, pdb_chain=pdb_chain)
+        dist_map = distances.intra_dists(res)
+    except ValueError:
+        pdb_chain = 'A'
+        res = evcouplings.compare.PDB.from_id(pdb_code).get_chain(pdb_chain)
+        dist_map = evcouplings.compare.distances.DistanceMap.from_coords(res)
+
+    #dist_map.to_file(f_name.replace(f'aln/{code}', f'map/{code}'))
+
     J = -dist_map.dist_matrix
     print(J.shape)
     J = J + cutoff
@@ -78,11 +77,35 @@ def generate_contact_map_monomer(f_name, cutoff=5.):
     return C
 
 
-def generate_train_dataset(train_data_directory='/mnt/c/Users/gooud/GWG_release/databases/aln'):
+def parse_alignment_into_dataset(file):
+    print('This step involves involves clustering all sequences in the alignment and can take several minutes')
+    cov, mi, di, fn, cn = generate_msa_features(file)
+    cm = generate_contact_map_monomer(file)
+    assert mi.shape == cm.shape
+    idx1, idx2 = np.triu_indices(cm.shape[0], 1)
+    step = cm.shape[0]
+    features = []
+    labels = []
+    for idx in list(zip(idx1, idx2)):
+        label = cm[idx]
+        labels.append(label)
+        ax1 = slice(idx[0], None, step)
+        ax2 = slice(idx[1], None, step)
+        covs = cov[ax1, ax2].flatten()
+        mutual_info = mi[idx]
+        direct_info = di[idx]
+        frob = fn[idx]
+        corr = cn[idx]
+        feature = covs
+        for num in [mutual_info, direct_info, frob, corr]:
+            feature = np.append(feature, num)
+        features.append(feature)
+    return features, labels
+
+
+def generate_train_dataset(train_data_directory='/mnt/d/aln'):
     missed = []
     for f in os.listdir(train_data_directory):
-        features = []
-        labels = []
         file = os.path.join(train_data_directory, f)
         print(os.path.splitext(file))
         print(os.path.splitext(file)[0]+'.txt')
@@ -92,52 +115,21 @@ def generate_train_dataset(train_data_directory='/mnt/c/Users/gooud/GWG_release/
         if os.path.splitext(file)[-1] == '.aln' and not os.path.exists(os.path.splitext(file)[0]+'.txt'):
             aln_convert(file)
             file = os.path.splitext(file)[0]+'.txt'
-        #elif os.path.splitext(file)[-1] == '.aln':
-        #    continue
         elif os.path.splitext(file)[-1] != '.txt':
             print(f"Skipped {file}")
             continue
         try:
-            cov, mi, di, fn, cn = generate_features(file)
-            cm = generate_contact_map_monomer(file)
-        except ValueError:
+            features, labels = parse_alignment_into_dataset(file)
+        except:
             print(f'Couldn\'t load data for file {file}')
             missed.append(file)
             continue
-        if mi.shape != cm.shape:
-            print(f'incongruent shapes: {mi.shape}, {cm.shape}')
-            missed.append(file)
-            continue
-        idx1, idx2 = np.triu_indices(cm.shape[0], 1)
-        step = cm.shape[0]
-        for idx in list(zip(idx1, idx2)):
-            #print(cm)
-            label = cm[idx]
-            #print(idx)
-            #print(cm[idx])
-            labels.append(label)
-            ax1 = slice(idx[0],None,step)
-            ax2 = slice(idx[1],None,step)
-            covs = cov[ax1,ax2].flatten()
-            mutual_info = mi[idx]
-            direct_info = di[idx]
-            frob = fn[idx]
-            corr = cn[idx]
-            #print(covs)
-            #print(mutual_info)
-            #print(direct_info)
-            #print(frob)
-            #print(corr)
-            feature = covs
-            for num in [mutual_info, direct_info, frob, corr]:
-                feature = np.append(feature ,num)
-            features.append(feature)
         pickle.dump(zip(features, labels), open(os.path.splitext(file)[0]+'.pkl', 'wb'))
 
     print(missed)
 
 
-def load_train_data(path, structure):
+def load_and_balance_train_data(path, structure):
     file = os.path.join(path, structure+'.pkl')
     with open(file, 'rb') as curr:
         training_data = pickle.load(curr)
@@ -159,11 +151,7 @@ def load_train_data(path, structure):
             if i == 1:
                 seq = line.strip()
                 break
-    DesObject = PyPro.GetProDes(seq)
-    aac = list(DesObject.GetAAComp().values())
-    ctd = list(DesObject.GetCTD().values())
-    mbauto = list(DesObject.GetMoranAuto().values())
-    prot_feats = aac + ctd + mbauto
+    prot_feats = generate_protein_sequence_features(seq)
     features_shuffled = [list(f) + prot_feats for f in features_shuffled]
 
     return features_shuffled, labels_shuffled
@@ -174,52 +162,71 @@ def load_test_data(path, structure):
     with open(file, 'rb') as curr:
         features, labels = zip(*pickle.load(curr))
     c = reconstruct_c(labels)
+    with open(file.replace('.pkl', '.txt'), 'r') as f:
+        for i, line in enumerate(f):
+            if i == 1:
+                seq = line.strip()
+                break
+    prot_feats = generate_protein_sequence_features(seq)
+    features = [list(f) + prot_feats for f in features]
     return features, labels, c
 
 
-def train_and_test_lr_model(pkl_path, n_train, n_test, save_loc, name, use_train_structures=None,\
-                            use_test_structures=None, mask=np.array([1]*400+[1]*4+[1]*20+[1]*147+[1]*240)):
+def train_and_test_lr_model(pkl_path, n_train, n_test, save_loc, name,  precomputed=False):
     os.makedirs(save_loc, exist_ok=True)
-    if use_train_structures is None or use_test_structures is None:
+    if not precomputed:
         print('Choosing structures randomly')
         structures = [os.path.splitext(s)[0] for s in os.listdir(pkl_path) if '.pkl' in s]
         ind = random.sample(structures, n_train+n_test)
         structures_train = ind[:n_train]
         structures_test = ind[n_train:]
+        features, labels = [], []
+        for i, s in enumerate(structures_train):
+            print(i, s)
+            feat, lab = load_and_balance_train_data(pkl_path, s)
+            features.extend(feat)
+            labels.extend(lab)
+        pickle.dump(zip(structures_train, features, labels),
+                    open(os.path.join(save_loc, 'precomputed_training_data.pkl'), 'wb'))
+        print('Finished loading training data')
     else:
-        print('Using selected structures')
-        structures_train = use_train_structures
-        structures_test = use_test_structures
+        structures_train, features, labels = zip(*pickle.load(
+            open(os.path.join(save_loc, 'precomputed_training_data.pkl'), 'rb')))
+        structures = [os.path.splitext(s)[0] for s in os.listdir(pkl_path) if '.pkl' in s]
+        for s in structures_train:
+            structures.remove(s)
+        # choose remaining structures to visualize randomly
+        structures_test = random.sample(structures, n_test)
+        print("Loaded data from precomputed pickle object")
     print(f'training with structures {structures_train}')
     print(f'testing with structures {structures_test}')
-    features, labels = [], []
-    for s in structures_train:
-        feat, lab = load_train_data(pkl_path, s)
-        features.extend(feat)
-        labels.extend(lab)
-    X_tr, y_tr = shuffle(features, labels)
-    X_tr_m = [list(np.array(x)*mask) for x in X_tr]
+    X_tr_m, y_tr = shuffle(features, labels)
+    #X_tr_m = [list(np.array(x)*mask) for x in X_tr]
     scaler = MinMaxScaler()
     scaler.fit(X_tr_m)
     X_tr_scaled = scaler.transform(X_tr_m)
-    lr_cov = RandomForestClassifier()
-    lr_cov.fit(X_tr_scaled, y_tr)
-    X_te, y_te = [], []
+    model = LogisticRegression(penalty='l1', solver='liblinear')
+    param_grid = {'C': [10**4, 10**2, 1]}
+    grid = GridSearchCV(model, param_grid=param_grid, verbose=3, n_jobs=-1, refit=True, cv=3)
+    grid.fit(X_tr_scaled, y_tr)
+    lr_cov = grid.best_estimator_
+    pickle.dump(lr_cov, open(os.path.join(save_loc, 'optimized_model.pkl'), 'wb'))
+    pickle.dump(scaler, open(os.path.join(save_loc, 'scaler.pkl'), 'wb'))
+    pd.DataFrame(grid.cv_results_).to_csv(os.path.join(save_loc, 'cv_results.csv'))
 
     for s in structures_test:
+        print(s)
         feat, lab, c = load_test_data(pkl_path, s)
         num_ecs = int(sum(lab))
-        X_te.extend(feat)
-        y_te.extend(lab)
-        X_te_m = [list(np.array(x)*mask) for x in feat]
+        X_te_m = feat
+        #X_te_m = [list(np.array(x)*mask) for x in feat]
         X_te_scaled = scaler.transform(X_te_m)
         y_pred = lr_cov.predict_proba(X_te_scaled)[:, 1]
         p, r, t = precision_recall_curve(lab, y_pred)
-        plt.clf()
-        plt.plot(r, p)
+        plt.plot(r, p, label=s)
+        plt.legend()
         plt.savefig(os.path.join(save_loc, name+f'_prc_tested_{s}'))
-        tup = sorted(list(zip(y_pred, lab)), key = lambda x: x[0], reverse=True)
-        y_pred_sorted = np.array([x[0] for x in tup])
+        tup = sorted(list(zip(y_pred, lab)), key=lambda x: x[0], reverse=True)
         y_te_sorted = np.array([x[1] for x in tup])
 
         C_cum_tp = y_te_sorted.cumsum(0)
@@ -236,22 +243,30 @@ def train_and_test_lr_model(pkl_path, n_train, n_test, save_loc, name, use_train
         plt.savefig(os.path.join(save_loc, name+f'_pred_true_C_{s}'))
         plt.close('all')
 
-    print('here')
-    X_te_m = [list(np.array(x)*mask) for x in X_te]
-    X_te_scaled = scaler.transform(X_te_m)
-    y_pred = lr_cov.predict_proba(X_te_scaled)[:, 1]
-    p, r, t = precision_recall_curve(y_te, y_pred)
-    #plt.clf()
-    #plt.plot(r[::100], p[::100])
-    #plt.savefig(os.path.join(save_loc, name+f'_prc_all'))
-    auprc = average_precision_score(y_te, y_pred)
-    print(f'Area under prc: {auprc}')
-    with open(os.path.join(save_loc, name+f'auprc'), 'w') as f:
-        f.write(str(auprc))
     return structures_train, structures_test
-    #with open(os.path.join(save_loc, 'w')) as f:
-    #    f.write('prec')
-#generate_train_dataset('/home/sreeves/aln')
-#dataset = load_train_data('/home/sreeves/aln')
-#pickle.dump(dataset, open('/home/sreeves/GWG_release/dataset.pkl', 'wb'))
-tr, te = train_and_test_lr_model('/home/sreeves/aln', n_train=100, n_test=100, save_loc='./rf_100_all_feats', name='', mask=np.array([1]*400+[1]*4+[1]*20+[1]*147+[1]*240)) #use_train_structures=tr, use_test_structures=te)
+
+
+def test_on_example_prots(directories=['1HZXOPSD_gwg', '2O72CADH_gwg', '6MSP_gwg_25', '6t1z_gwg'], model_opt='./lr_100_l2/optimized_model.pkl'):
+    lr_cov = pickle.load(open(model_opt, 'rb'))
+    scaler = pickle.load(open(model_opt.replace('optimized_model', 'scaler'), 'rb'))
+    for dir in directories:
+        pdb = dir[:4]
+        file = os.path.join('.', dir, f'{pdb}.a2m')
+        try:
+            features, lab = parse_alignment_into_dataset(file)
+        except:
+            file = os.path.join('.', dir, f'{pdb.lower()}.a2m')
+            features, lab = parse_alignment_into_dataset(file)
+        seq = ''.join(evcouplings.compare.PDB.from_id(pdb).get_chain('A').residues.one_letter_code.values)
+        print(seq)
+        prot_feats = generate_protein_sequence_features(seq)
+        features = [list(f) + prot_feats for f in features]
+        num_ecs = int(sum(lab))
+        X_te_scaled = scaler.transform(features)
+        y_pred = lr_cov.predict_proba(X_te_scaled)[:, 1]
+        plot_stats(y_pred, lab, num_ecs, pdb)
+
+#generate_train_dataset(train_data_directory='/mnt/d/OneDrive - University of Waterloo/aln')
+tr, te = train_and_test_lr_model('/mnt/d/OneDrive - University of Waterloo/aln', n_train=100, n_test=10,
+                                 save_loc='./lr_100_l2', name='', precomputed=True)
+#test_on_example_prots(['6MSP_gwg_30'])

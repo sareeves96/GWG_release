@@ -54,6 +54,8 @@ def generate_contact_map_monomer(pdb_code, chain, save_loc):
 
 def load_real_protein(a2m, intra_file, cutoff, pdb_code, chain, batch_size, th, overwrite,
                       uniref90='/home/sareeves96/databases/uniref90.fasta'):
+    '''This function is an adaptation of load_real_protein from utils.py. My innovation is to make it work
+    with alignments generated using JackHMMER and load experimental distance maps from the PDB'''
 
     if not os.path.exists(a2m) or overwrite:
         print("Generating alignment using jackhmmer...")
@@ -126,6 +128,7 @@ def load_real_protein(a2m, intra_file, cutoff, pdb_code, chain, batch_size, th, 
 
 
 def main(args):
+    '''This function is an adaptation of the code in pcd_potts.py. It is mostly not original code'''
     os.makedirs(args.save_dir, exist_ok=True)
     logger = open("{}/log.txt".format(args.save_dir), 'w')
 
