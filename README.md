@@ -18,7 +18,9 @@ features for my own choice of original model/feature combination.
 
 # Requirements
 *IMPORTANT: Use the provided OneDrive Link to fill the corresponding empty folder with files to speed up testing:
+```
 aln/ 2o72_test/ 1hzx_test/ logreg_test/
+```
 This work will require several python modules to work properly, which the original authors did not include. Hence, I 
 generated a requirements.txt. After cloning the repository and creating a virtualenv if desired:
 ```
@@ -29,7 +31,6 @@ If you want to test the pipeline on an arbitrary protein, you will have to downl
 in order to generate MSAs. It is expected by default in a databases folder in this repo and is >32GB compressed:
 ```
 sudo apt install hmmer
-mkdir databases
 cd databases
 wget https://ftp.uniprot.org/pub/databases/uniprot/current_release/uniref/uniref90/uniref90.fasta.gz
 gzip -d uniref90.fasta.gz
@@ -44,7 +45,7 @@ tar -xzf dc_train
 ```
 It is sourced from the following paper: 
 [Jones DT and Kandathil SM (2018). High precision in protein contact prediction using fully convolutional neural networks and minimal sequence features. Bioinformatics 34(19): 3308-3315.](https://github.com/psipred/DeepCov)
-Contact maps are generated independently of this dataset, and so only the aln folder is needed.
+Contact maps are generated independently of this dataset, and so only the aln folder is needed (expected in ./aln).
 Generating features from the training data is an enormous task, and so pickles with pre-extracted features are provided
 via OneDrive, while the precomputed_training_data.pkl stores an example slice which can be loaded into memory.
 
